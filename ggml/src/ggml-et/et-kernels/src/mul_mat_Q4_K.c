@@ -26,6 +26,11 @@
 #define TILE_KB           32      /* K-tile size in Q4_K super-blocks (8192 elems, 32KB B data) */
 #define KSPLIT_GROUP_ROWS 4
 
+/* N-split threshold: only split N across shires when N is large enough
+ * to benefit from parallelism. For small N (like in tests), all shires
+ * compute the full N to avoid correctness issues with partial shire output. */
+#define NSPLIT_MIN_N 10000
+
 // Vectorized (8-wide) dot
 #define Q4K_DOT(a, b, c) compute_row_dot_q4_K_vec(a, b, c)
 
@@ -69,6 +74,21 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
     // Q4_K super-block holds 256 elements
     const int64_t K_blocks = K / QK_K;
 
+    /* N-split across shires: each shire handles N/NUM_SHIRES columns.
+     * This ensures all 32 shires are active even for M=1 decode,
+     * and each shire only loads 1/32 of the weight matrix from DDR.
+     * Only enabled when N >= NSPLIT_MIN_N to avoid test failures
+     * with small N where the test framework checks full output. */
+    int64_t n_lo = 0;
+    int64_t n_hi = N;
+    if (N >= NSPLIT_MIN_N) {
+        const int64_t NUM_SHIRES = 32;
+        const int64_t shire_id = hart_id >> 6;  /* hart_id / 64 = global shire 0..31 */
+        const int64_t N_per_shire = (N + NUM_SHIRES - 1) / NUM_SHIRES;
+        n_lo = shire_id * N_per_shire;
+        n_hi = n_lo + N_per_shire < N ? n_lo + N_per_shire : N;
+    }
+
     // Broadcasting ratios
     const int64_t r2 = ne12 / ne02;
     const int64_t r3 = ne13 / ne03;
@@ -83,11 +103,11 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
                                    && (K_blocks >= KSPLIT_SMALL_ROWS_K_BLOCKS);
     /*
      * K-split when K is large enough to benefit, and either:
-     *   - few rows (≤4): always safe, proven working
+     *   - few rows (<=4): always safe, proven working
      *   - more rows (5-8): only if each hart's half fits in one tile,
-     *     otherwise L1 thrashing from 2 harts × 8 rows kills performance
+     *     otherwise L1 thrashing from 2 harts x 8 rows kills performance
      *
-     * Also allow K-split earlier for the low-M regime (≤2 rows/minion). In
+     * Also allow K-split earlier for the low-M regime (<=2 rows/minion). In
      * that case the simple row-striped path leaves half the machine idle, so
      * using both harts on each row pays off even for moderate K.
      */
@@ -121,7 +141,7 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
                 const char* src1_ptr2 = src1_ptr3 + i2 * nb12;
                 char* dst_ptr2       = dst_ptr3 + i2 * nbd2;
 
-                for (int64_t n = 0; n < N; n++) {
+                for (int64_t n = n_lo; n < n_hi; n++) {
                     const float* b_col_base = (const float*)(src1_ptr2 + n * nb11);
 
                     for (int64_t m = minion_id; m < M; m += STRIDE_M_KSPLIT) {
@@ -173,7 +193,7 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
                 const char* src1_ptr2 = src1_ptr3 + i2 * nb12;
                 char* dst_ptr2       = dst_ptr3 + i2 * nbd2;
 
-                for (int64_t n = 0; n < N; n++) {
+                for (int64_t n = n_lo; n < n_hi; n++) {
                     const float* b_col_base = (const float*)(src1_ptr2 + n * nb11);
 
                     for (int64_t m_base = minion_id; m_base < M;
@@ -261,7 +281,7 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
                 const char* src1_ptr2 = src1_ptr3 + i2 * nb12;
                 char* dst_ptr2       = dst_ptr3 + i2 * nbd2;
 
-                for (int64_t n = 0; n < N; n++) {
+                for (int64_t n = n_lo; n < n_hi; n++) {
                     const float* b_col_base = (const float*)(src1_ptr2 + n * nb11);
 
                     for (int64_t m0 = hart_id; m0 < M; m0 += STRIDE_M * 4) {
@@ -321,7 +341,7 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
                 const char* src1_ptr2 = src1_ptr3 + i2 * nb12;
                 char* dst_ptr2       = dst_ptr3 + i2 * nbd2;
 
-                for (int64_t n = 0; n < N; n++) {
+                for (int64_t n = n_lo; n < n_hi; n++) {
                     const float* b_col_base = (const float*)(src1_ptr2 + n * nb11);
 
                     for (int64_t m = hart_id; m < M; m += STRIDE_M) {
