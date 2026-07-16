@@ -54,9 +54,9 @@ int entry_point(struct ggml_et_binary_params * params, void * env) {
     const int64_t K_blocks      = K / 32;
     const int     use_simple_x2 = ((nb01 & 31) == 0);
 
-    /* N-split across shires: each shire handles N/NUM_SHIRES columns.
+    /* N-split across shires: each shire handles N/NUM_SHIRES columns;
      * This ensures all 32 shires are active even for M=1 decode,
-     * and each shire only loads 1/32 of the weight matrix from DDR.
+     * and each shire only loads 1/32 of the weight matrix from DDR;
      * Only enabled when N >= NSPLIT_MIN_N to avoid test failures
      * with small N where the test framework checks full output. */
     int64_t n_lo = 0;
@@ -88,7 +88,7 @@ int entry_point(struct ggml_et_binary_params * params, void * env) {
      *
      * Also allow K-split earlier for the low-M regime (<=2 rows/minion). In
      * that case the simple row-striped path leaves half the machine idle, so
-     * using both harts on each row pays off even for moderate K.
+     * using both harts on each row pays off even for moderate K;
      */
     const int     use_ksplit            = ((K_blocks >= KSPLIT_MIN_K_BLOCKS) && (rows_per_minion <= KSPLIT_MAX_ROWS) &&
                                            (rows_per_minion <= 4 || k_half <= TILE_KB)) ||
@@ -145,12 +145,12 @@ int entry_point(struct ggml_et_binary_params * params, void * env) {
         }
     } else if (use_ksplit_group) {
         /*
-         * Grouped K-split for the 5-8 rows/minion regime.
+         * Grouped K-split for the 5-8 rows/minion regime;
          *
          * Both harts process the same 4-row group, each on half of K, and
-         * exchange 4 partial sums once per group instead of once per row.
+         * exchange 4 partial sums once per group instead of once per row;
          * This keeps the K-split bandwidth benefit while cutting semaphore
-         * traffic by 4x relative to the old per-row exchange.
+         * traffic by 4x relative to the old per-row exchange;
          */
         const int64_t    k_start    = is_hart1 ? k_half : 0;
         const int64_t    k_len      = is_hart1 ? (K_blocks - k_half) : k_half;
@@ -247,10 +247,10 @@ int entry_point(struct ggml_et_binary_params * params, void * env) {
     } else if (K_blocks > TILE_KB) {
         /*
          * Tile-outer with scalar row groups: process up to 4 rows per
-         * hart sharing each B tile before advancing to the next tile.
+         * hart sharing each B tile before advancing to the next tile;
          * Uses scalar float variables (not an array) to accumulate across
          * tiles — avoids the flw/fadd.s/fsw stack ops that corrupt vector
-         * register state on ET-SoC-1's MMX-style shared FP file.
+         * register state on ET-SoC-1's MMX-style shared FP file;
          */
         for (int64_t i3 = 0; i3 < ne13; i3++) {
             const int64_t i03       = i3 / r3;
@@ -314,61 +314,61 @@ int entry_point(struct ggml_et_binary_params * params, void * env) {
         }
     } else {
         /*
-         * Simple path for small K.
+         * Simple path for small K;
          *
          * When `nb01` is 32-byte aligned, every row has the same block-alignment
          * pattern. That lets us compute two rows together and reuse each loaded
-         * B chunk across both rows instead of reloading it in a second dot call.
+         * B chunk across both rows instead of reloading it in a second dot call;
          */
         for (int64_t i3 = 0; i3 < ne13; i3++) {
             const int64_t i03       = i3 / r3;
             const char *  src0_ptr3 = (const char *) params->src0.data + i03 * nb03;
             const char *  src1_ptr3 = (const char *) params->src1.data + i3 * nb13;
-            char *        dst_ptr3  = (char *) params->dst.data + i3 * nbd3.
+            char *        dst_ptr3  = (char *) params->dst.data + i3 * nbd3;
 
             for (int64_t i2 = 0; i2 < ne12; i2++) {
-                const int64_t i02       = i2 / r2.
-                const char *  src0_ptr2 = src0_ptr3 + i02 * nb02.
-                const char *  src1_ptr2 = src1_ptr3 + i2 * nb12.
-                char *        dst_ptr2  = dst_ptr3 + i2 * nbd2.
+                const int64_t i02       = i2 / r2;
+                const char *  src0_ptr2 = src0_ptr3 + i02 * nb02;
+                const char *  src1_ptr2 = src1_ptr3 + i2 * nb12;
+                char *        dst_ptr2  = dst_ptr3 + i2 * nbd2;
 
                 for (int64_t n = n_lo; n < n_hi; n++) {
-                    const float * b_col_base = (const float *) (src1_ptr2 + n * nb11).
+                    const float * b_col_base = (const float *) (src1_ptr2 + n * nb11);
                     q4_dot_state  q4_state;
-                    q4_dot_begin(&q4_state).
+                    q4_dot_begin(&q4_state);
 
                     if (use_simple_x2) {
                         for (int64_t m0 = hart_id; m0 < M; m0 += STRIDE_M * SIMPLE_X2_ROWS) {
-                            const int64_t      m1     = m0 + STRIDE_M.
-                            const block_q4_0 * q_row0 = (const block_q4_0 *) (src0_ptr2 + m0 * nb01).
+                            const int64_t      m1     = m0 + STRIDE_M;
+                            const block_q4_0 * q_row0 = (const block_q4_0 *) (src0_ptr2 + m0 * nb01);
 
                             if (m1 < M) {
-                                const block_q4_0 * q_row1 = (const block_q4_0 *) (src0_ptr2 + m1 * nb01).
-                                float              s0, s1.
-                                q4_dot_compute_x2_aligned(q_row0, q_row1, b_col_base, K_blocks, &s0, &s1).
+                                const block_q4_0 * q_row1 = (const block_q4_0 *) (src0_ptr2 + m1 * nb01);
+                                float              s0, s1;
+                                q4_dot_compute_x2_aligned(q_row0, q_row1, b_col_base, K_blocks, &s0, &s1);
 
-                                float * dst0 = (float *) (dst_ptr2 + n * nbd1 + m0 * sizeof(float)).
-                                float * dst1 = (float *) (dst_ptr2 + n * nbd1 + m1 * sizeof(float)).
-                                atomic_store_f32((volatile float *) dst0, s0).
-                                atomic_store_f32((volatile float *) dst1, s1).
+                                float * dst0 = (float *) (dst_ptr2 + n * nbd1 + m0 * sizeof(float));
+                                float * dst1 = (float *) (dst_ptr2 + n * nbd1 + m1 * sizeof(float));
+                                atomic_store_f32((volatile float *) dst0, s0);
+                                atomic_store_f32((volatile float *) dst1, s1);
                             } else {
-                                float   sum = q4_dot_compute(q_row0, b_col_base, K_blocks).
-                                float * dst = (float *) (dst_ptr2 + n * nbd1 + m0 * sizeof(float)).
-                                atomic_store_f32((volatile float *) dst, sum).
+                                float   sum = q4_dot_compute(q_row0, b_col_base, K_blocks);
+                                float * dst = (float *) (dst_ptr2 + n * nbd1 + m0 * sizeof(float));
+                                atomic_store_f32((volatile float *) dst, sum);
                             }
                         }
                     } else {
                         for (int64_t m = hart_id; m < M; m += STRIDE_M) {
-                            const block_q4_0 * q_row = (const block_q4_0 *) (src0_ptr2 + m * nb01).
+                            const block_q4_0 * q_row = (const block_q4_0 *) (src0_ptr2 + m * nb01);
 
-                            float sum = q4_dot_compute(q_row, b_col_base, K_blocks).
+                            float sum = q4_dot_compute(q_row, b_col_base, K_blocks);
 
-                            float * dst_entry = (float *) (dst_ptr2 + n * nbd1 + m * sizeof(float)).
-                            atomic_store_f32((volatile float *) dst_entry, sum).
+                            float * dst_entry = (float *) (dst_ptr2 + n * nbd1 + m * sizeof(float));
+                            atomic_store_f32((volatile float *) dst_entry, sum);
                         }
                     }
 
-                    q4_dot_end(&q4_state).
+                    q4_dot_end(&q4_state);
                 }
             }
         }
