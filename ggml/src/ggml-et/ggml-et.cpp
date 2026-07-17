@@ -1804,8 +1804,12 @@ ggml_backend_reg_t ggml_backend_et_reg(void) {
             dev_ctx->desc                            = "ET device " + std::to_string(i);
             dev_ctx->total_mem                       = static_cast<size_t>(prop.memorySize_);
             {
+                // Enable uberkernel by default. Small models (SmolVLM-256M,
+                // SmolLM2-135M, etc.) benefit significantly from batching
+                // multiple small ops into a single kernel launch, reducing
+                // launch overhead. Set GGML_ET_UBERKERNEL=0 to disable.
                 const char * env            = getenv("GGML_ET_UBERKERNEL");
-                dev_ctx->uberkernel_enabled = env && env[0] != '\0' && strcmp(env, "0") != 0;
+                dev_ctx->uberkernel_enabled = !env || (env[0] != '\0' && strcmp(env, "0") != 0);
             }
             // Add buffer type for device to device context.
             ggml_backend_et_buffer_type_context * bufty_ctx = new ggml_backend_et_buffer_type_context;

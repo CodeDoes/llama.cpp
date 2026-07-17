@@ -13,8 +13,12 @@
 
 #define STRIDE_M                   2048 /* 32 shires x 32 minions x 2 harts */
 #define STRIDE_M_KSPLIT            1024 /* 32 shires x 32 minions (both harts share rows) */
-#define KSPLIT_MIN_K_BLOCKS        256  /* K >= 8192 elements */
-#define KSPLIT_SMALL_ROWS_K_BLOCKS 64   /* K >= 2048 elements for very small M */
+/* smolVLM-256M has K=960 (30 blocks) for QKV and K=2560 (80 blocks) for FFN down.
+ * Lower thresholds ensure K-split is active for these small dimensions,
+ * doubling hart utilization (both harts in a minion split K) on the manycore.
+ * Without K-split, M < 2048 leaves half the harts idle. */
+#define KSPLIT_MIN_K_BLOCKS        128  /* K >= 4096 elements */
+#define KSPLIT_SMALL_ROWS_K_BLOCKS 16   /* K >= 512 elements for very small M */
 #define KSPLIT_MAX_ROWS            8    /* max rows per minion for K-split */
 #define TILE_KB                    256  /* K-tile size in Q8_0 blocks (8192 elems, 32KB B data) */
 #define KSPLIT_GROUP_ROWS          4
