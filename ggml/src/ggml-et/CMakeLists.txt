@@ -86,6 +86,7 @@ set(KERNELS
     conv_2d_f32_me
     memops
     uberkernel
+    llama32_fused_ffn
 )
 
 # Kernels that we support dispatch form Uberkernel
