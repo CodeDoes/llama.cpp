@@ -7,6 +7,7 @@
 #include <stdio.h>
 
 #include <cstdint>
+#include <cstring>
 
 // CPU comparison configuration - can be enabled for debugging
 static ggml_et_cpu_compare_config rope_cpu_compare_config = {
@@ -2630,5 +2631,87 @@ bool ggml_et_op_pad(ggml_backend_et_device_context * dev_ctx, const ggml_tensor 
     }
 
     ET_PERF_END("PAD", "pad_f32", node);
+    return kernel_result;
+}
+
+bool ggml_et_op_fused_ffn(ggml_backend_et_device_context * dev_ctx,
+                          const ggml_tensor *              gate_mm,
+                          const ggml_tensor *              up_mm,
+                          const ggml_tensor *              silu_node,
+                          const ggml_tensor *              mul_node,
+                          const ggml_tensor *              down_mm) {
+    ET_PERF_START();
+
+    if (!dev_ctx || !gate_mm || !up_mm || !silu_node || !mul_node || !down_mm) {
+        GGML_LOG_ERROR("ET: Invalid parameters for fused FFN operation\n");
+        return false;
+    }
+
+    // Extract dimensions from the tensors
+    // gate_proj: src[0]=W_gate[K=hidden, N=inter], src[1]=input[hidden]
+    // up_proj:   src[0]=W_up[K=hidden, N=inter], src[1]=input[hidden]
+    // down_proj: src[0]=W_down[K=inter, N=hidden], src[1]=MUL output
+    const int64_t hidden = gate_mm->src[0]->ne[0];  // K of gate_proj weight
+    const int64_t inter  = gate_mm->src[0]->ne[1];  // N of gate_proj weight
+    const int64_t hidden_blocks = hidden / 32;
+    const int64_t inter_blocks  = inter / 32;
+
+    // Validate expected types: Q8_0 weights, F32 activations
+    if (gate_mm->src[0]->type != GGML_TYPE_Q8_0 ||
+        up_mm->src[0]->type   != GGML_TYPE_Q8_0 ||
+        down_mm->src[0]->type  != GGML_TYPE_Q8_0) {
+        GGML_LOG_ERROR("ET: fused FFN requires Q8_0 weights\n");
+        return false;
+    }
+
+    if (gate_mm->src[1]->type != GGML_TYPE_F32 ||
+        up_mm->src[1]->type   != GGML_TYPE_F32 ||
+        down_mm->src[1]->type  != GGML_TYPE_F32) {
+        GGML_LOG_ERROR("ET: fused FFN requires F32 activations\n");
+        return false;
+    }
+
+    // Validate dimensions match Llama 3.2 1B expectations
+    if (hidden != 2048 || inter != 8192) {
+        GGML_LOG_ERROR("ET: fused FFN unsupported dimensions: hidden=%ld inter=%ld (expected 2048, 8192)\n",
+                       (long) hidden, (long) inter);
+        return false;
+    }
+
+    // Allocate scratch buffer: inter * 3 * sizeof(float) for gate, up, gated
+    // The scratch is allocated as a temporary buffer on the device
+    size_t scratch_size = (size_t) inter * 3 * sizeof(float);  // 8192 * 3 * 4 = 98304 bytes
+    std::byte * scratch = nullptr;
+    std::shared_ptr<rt::IRuntime> runtime = ggml_et_runtime();
+    if (runtime) {
+        scratch = static_cast<std::byte *>(runtime->allocDevice(scratch_size));
+    }
+    if (!scratch) {
+        GGML_LOG_ERROR("ET: fused FFN failed to allocate scratch buffer\n");
+        return false;
+    }
+
+    ggml_et_fused_ffn_params params;
+    memset(&params, 0, sizeof(params));
+    params.input_ptr     = (uint64_t)(uintptr_t) gate_mm->src[1]->data;
+    params.wgate_ptr     = (uint64_t)(uintptr_t) gate_mm->src[0]->data;
+    params.wup_ptr       = (uint64_t)(uintptr_t) up_mm->src[0]->data;
+    params.wdown_ptr     = (uint64_t)(uintptr_t) down_mm->src[0]->data;
+    params.output_ptr    = (uint64_t)(uintptr_t) down_mm->data;
+    params.scratch_ptr   = (uint64_t)(uintptr_t) scratch;
+    params.hidden        = hidden;
+    params.inter         = inter;
+    params.hidden_blocks = hidden_blocks;
+    params.inter_blocks  = inter_blocks;
+
+    bool kernel_result = ggml_et_launch_kernel(dev_ctx, "llama32_fused_ffn", &params, sizeof(params), 0xFFFFFFFF);
+
+    // Free the scratch buffer
+    if (runtime && scratch) {
+        runtime->freeDevice(0, scratch);
+    }
+
+    ET_PERF_END_EXT("FUSED_FFN", "llama32_fused_ffn", down_mm,
+                     "hidden=%ld inter=%ld", (long) hidden, (long) inter);
     return kernel_result;
 }

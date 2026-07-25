@@ -678,6 +678,47 @@ static ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, ggml_cg
             continue;
         }
 
+        // --- Fused FFN check: 5 consecutive ops forming gate_proj + up_proj + SiLU + mul + down_proj ---
+        if (i + 4 < cgraph->n_nodes) {
+            ggml_tensor * n0 = cgraph->nodes[i];
+            ggml_tensor * n1 = cgraph->nodes[i + 1];
+            ggml_tensor * n2 = cgraph->nodes[i + 2];
+            ggml_tensor * n3 = cgraph->nodes[i + 3];
+            ggml_tensor * n4 = cgraph->nodes[i + 4];
+
+            // Check ops: MUL_MAT, MUL_MAT, SILU (unary), MUL, MUL_MAT
+            if (n0->op == GGML_OP_MUL_MAT && n1->op == GGML_OP_MUL_MAT &&
+                n2->op == GGML_OP_UNARY  && ggml_get_unary_op(n2) == GGML_UNARY_OP_SILU &&
+                n3->op == GGML_OP_MUL    && n4->op == GGML_OP_MUL_MAT) {
+
+                // Both MUL_MAT ops must consume the same input
+                if (n0->src[1] == n1->src[1]) {
+                    // Identify gate (produces input to SILU) and up (produces input to MUL)
+                    const ggml_tensor * gate_mm = (n2->src[0] == n0) ? n0 : n1;
+                    const ggml_tensor * up_mm   = (gate_mm == n0) ? n1 : n0;
+
+                    // SILU consumes gate output
+                    // MUL consumes SILU output and up output
+                    // down MUL_MAT consumes MUL output
+                    if (n2->src[0] == gate_mm &&
+                        ((n3->src[0] == n2 && n3->src[1] == up_mm) ||
+                         (n3->src[0] == up_mm && n3->src[1] == n2)) &&
+                        n4->src[1] == n3) {
+
+                        // All Q8_0 weights?
+                        if (gate_mm->src[0]->type == GGML_TYPE_Q8_0 &&
+                            up_mm->src[0]->type   == GGML_TYPE_Q8_0 &&
+                            n4->src[0]->type      == GGML_TYPE_Q8_0) {
+
+                            ggml_et_op_fused_ffn(dev_ctx, gate_mm, up_mm, n2, n3, n4);
+                            i += 4;  // skip all 5 nodes
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+
         switch (node->op) {
             case GGML_OP_SQR:
                 ggml_et_op_sqr(dev_ctx, node);

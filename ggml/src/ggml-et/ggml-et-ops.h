@@ -387,6 +387,25 @@ bool ggml_et_op_pad(ggml_backend_et_device_context * dev_ctx, const ggml_tensor 
 bool ggml_et_op_set(ggml_backend_et_device_context * dev_ctx, const ggml_tensor * node);
 bool ggml_et_op_ssm_conv(ggml_backend_et_device_context * dev_ctx, const ggml_tensor * node);
 bool ggml_et_op_ssm_scan(ggml_backend_et_device_context * dev_ctx, const ggml_tensor * node);
+struct ggml_et_fused_ffn_params {
+    uint64_t input_ptr;
+    uint64_t wgate_ptr;
+    uint64_t wup_ptr;
+    uint64_t wdown_ptr;
+    uint64_t output_ptr;
+    uint64_t scratch_ptr;
+    int64_t  hidden;
+    int64_t  inter;
+    int64_t  hidden_blocks;
+    int64_t  inter_blocks;
+};
+
 bool ggml_et_op_rms_norm_mul(ggml_backend_et_device_context * dev_ctx,
                              const ggml_tensor *              rms_norm_node,
                              const ggml_tensor *              mul_node);
+bool ggml_et_op_fused_ffn(ggml_backend_et_device_context * dev_ctx,
+                          const ggml_tensor *              gate_mm,     // MUL_MAT (gate_proj)
+                          const ggml_tensor *              up_mm,       // MUL_MAT (up_proj)
+                          const ggml_tensor *              silu_node,   // SILU unary
+                          const ggml_tensor *              mul_node,    // MUL
+                          const ggml_tensor *              down_mm);    // MUL_MAT (down_proj)
